@@ -119,25 +119,12 @@ def get_top_albums(users, avg_album_distribution, query_limit, period):
     album_counts = {k: v for k, v in sorted(album_counts.items(), key=lambda item: item[1], reverse=True)}
     return album_counts
 
-def verify_image_url(url):
-    try:
-        response = requests.head(url, timeout=10)
-        response.raise_for_status()
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"Error verifying image URL {url}: {e}")
-        return False
-
 def download_image(url, cache_dir, retries=3, delay=2):
     filename = os.path.join(cache_dir, os.path.basename(url))
     
     # Check if the image is already in the cache
     if os.path.exists(filename):
         return Image.open(filename)
-    
-    if not verify_image_url(url):
-        print(f"Invalid image URL: {url}. Skipping this image.")
-        return None
 
     for i in range(retries):
         try:
@@ -276,7 +263,7 @@ def main():
         image_size=(300, 300),
         padding_percent=7,
         title_padding_percent=12.5,
-        period="1year",  # Change this as needed
+        period="1month",  # Change this as needed
         logo_path="logo.png",
         title_font_path="GeographicaHand.ttf",
         text_font_path="Monospace.ttf",
