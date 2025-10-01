@@ -3,3 +3,5 @@ cached_art/
 final_image.png
 Indieheads topster chart.csv
 .DS_Store
+venv/
+__pycache__/
