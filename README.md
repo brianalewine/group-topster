@@ -18,9 +18,21 @@ Instructions on how to use the project.
 
 3. Prepare a CSV file named `Indieheads topster chart.csv` with a list of users. The CSV should have a header and at least one column containing the usernames.
 
-4. Run the script:
+4. Run the script with a time period parameter:
     ```sh
-    python grouptopster.py
+    python grouptopster.py <period>
+    ```
+    
+    Available periods:
+    - `week` - Generate a weekly chart
+    - `month` - Generate a monthly chart  
+    - `year` - Generate a yearly chart
+    
+    Examples:
+    ```sh
+    python grouptopster.py week
+    python grouptopster.py month
+    python grouptopster.py year
     ```
 
 5. The script will generate an image named final_image.png in the project directory, displaying the top albums for the specified period.
