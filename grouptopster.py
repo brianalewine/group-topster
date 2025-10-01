@@ -12,6 +12,7 @@ import concurrent.futures
 from PIL import ImageDraw, ImageFont
 import time
 import csv
+import sys
 
 load_dotenv()
 api_key = os.getenv("API_KEY")
@@ -254,6 +255,28 @@ def print_dict(d, config):
     return image_info
 
 def main():
+    # Parse command line arguments
+    if len(sys.argv) < 2:
+        print("Usage: python grouptopster.py <period>")
+        print("Available periods: week, month, year")
+        sys.exit(1)
+    
+    period_arg = sys.argv[1].lower()
+    
+    # Map user-friendly names to API period codes
+    period_mapping = {
+        "week": "1week",
+        "month": "1month", 
+        "year": "1year"
+    }
+    
+    if period_arg not in period_mapping:
+        print(f"Invalid period: {period_arg}")
+        print("Available periods: week, month, year")
+        sys.exit(1)
+    
+    selected_period = period_mapping[period_arg]
+    
     users = read_users_from_csv("Indieheads topster chart.csv")
     
     # Configuration
@@ -263,7 +286,7 @@ def main():
         image_size=(300, 300),
         padding_percent=7,
         title_padding_percent=12.5,
-        period="1month",  # Change this as needed
+        period=selected_period,  # Use the selected period from command line
         logo_path="logo.png",
         title_font_path="GeographicaHand.ttf",
         text_font_path="Monospace.ttf",
