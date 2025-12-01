@@ -49,25 +49,101 @@ def read_users_from_csv(filepath):
     return list(users)  
 
 def fetch_scrobbles_and_distribution(user, timestamp, query_limit, period):
+    # Add a small delay to avoid rate limiting
+    time.sleep(0.3)
+    
     total_scrobbles_url = f'http://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={user}&api_key={api_key}&from={timestamp}&format=json&limit=1'
     album_distribution_url = f'http://ws.audioscrobbler.com/2.0/?method=user.getTopAlbums&user={user}&api_key={api_key}&period={period}&format=json&limit={query_limit}'
 
-    total_scrobbles_response = requests.get(total_scrobbles_url)
-    total_scrobbles_res = total_scrobbles_response.json()
-    
-    if "recenttracks" not in total_scrobbles_res:
-        print(f"No recent tracks found for user: {user}")
-        return user, 0, np.zeros(query_limit)
+    # Retry logic for error code 8 (server errors) - increased retries
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            total_scrobbles_response = requests.get(total_scrobbles_url)
+            total_scrobbles_res = total_scrobbles_response.json()
+        except requests.exceptions.JSONDecodeError as e:
+            print(f"Invalid JSON response for user {user}: {e}")
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                print(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"Failed to get valid response for user {user} after {max_retries} attempts")
+                return user, 0, np.zeros(query_limit)
+        
+        # Check for API errors
+        if "error" in total_scrobbles_res:
+            error_code = total_scrobbles_res.get('error')
+            error_msg = total_scrobbles_res.get('message', 'Unknown error')
+            
+            # Error 8: Operation failed (temporary server issue) - retry with exponential backoff
+            if error_code == 8 and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2  # 2s, 4s
+                print(f"Last.fm server error for user {user} (code 8), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            
+            # Error 17: User private/login required - skip without retry
+            if error_code == 17:
+                print(f"User {user} has private settings (code 17), skipping")
+            else:
+                print(f"Last.fm API error for user {user}: {error_msg} (code {error_code})")
+            
+            return user, 0, np.zeros(query_limit)
+        
+        if "recenttracks" not in total_scrobbles_res:
+            print(f"No recent tracks found for user: {user}")
+            return user, 0, np.zeros(query_limit)
+        
+        # Success - break out of retry loop
+        break
     
     total_scrobbles = int(total_scrobbles_res["recenttracks"]["@attr"]["totalPages"])
     
-    album_distribution_response = requests.get(album_distribution_url)
-    album_distribution_res = album_distribution_response.json()
-    
-    if "topalbums" not in album_distribution_res:
-        print(album_distribution_res)
-        print(user)
-        return user, total_scrobbles, np.zeros(query_limit)
+    # Retry logic for top albums request
+    for attempt in range(max_retries):
+        try:
+            album_distribution_response = requests.get(album_distribution_url)
+            album_distribution_res = album_distribution_response.json()
+        except requests.exceptions.JSONDecodeError as e:
+            print(f"Invalid JSON response for user {user} top albums: {e}")
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                print(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"Failed to get valid response for user {user} top albums after {max_retries} attempts")
+                return user, total_scrobbles, np.zeros(query_limit)
+        
+        # Check for API errors
+        if "error" in album_distribution_res:
+            error_code = album_distribution_res.get('error')
+            error_msg = album_distribution_res.get('message', 'Unknown error')
+            
+            # Error 8: Retry with exponential backoff
+            if error_code == 8 and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2  # 2s, 4s
+                print(f"Last.fm server error for user {user} top albums (code 8), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            
+            if error_code == 17:
+                print(f"User {user} has private top albums (code 17), skipping")
+            else:
+                print(f"Last.fm API error for user {user} top albums: {error_msg} (code {error_code})")
+            
+            return user, total_scrobbles, np.zeros(query_limit)
+        
+        if "topalbums" not in album_distribution_res:
+            print(f"No top albums data for user: {user}")
+            print(f"Response keys: {list(album_distribution_res.keys())}")
+            print(f"Full response: {album_distribution_res}")
+            return user, total_scrobbles, np.zeros(query_limit)
+        
+        # Success - break out of retry loop
+        break
     
     albums = album_distribution_res['topalbums']['album']
     
@@ -83,7 +159,8 @@ def fetch_scrobbles_and_distribution(user, timestamp, query_limit, period):
 def fetch_scrobbles_and_distributions_concurrently(users, timestamp, query_limit, period):
     scrobble_counts = {}
     distributions = []
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # Limit concurrent threads to avoid rate limiting (max 3 at a time for better reliability)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(lambda user: fetch_scrobbles_and_distribution(user, timestamp, query_limit, period), users))
         for user, total_scrobbles, distribution in results:
             scrobble_counts[user] = total_scrobbles
@@ -127,27 +204,61 @@ def download_image(url, cache_dir, retries=3, delay=2):
     if os.path.exists(filename):
         return Image.open(filename)
 
+    # Add User-Agent header to avoid CDN blocking
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
     for i in range(retries):
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()  # Raise an HTTPError for bad responses
+            
+            # Check if response is JSON error instead of an image
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' in content_type:
+                error_msg = response.json().get('message', 'Unknown error')
+                print(f"Last.fm API error for {url}: {error_msg}")
+                
+                # Try alternative image sizes when thumbor fails
+                alternative_sizes = ['174x174', '64x64', '34x34']
+                for alt_size in alternative_sizes:
+                    alt_url = url.replace('300x300', alt_size)
+                    print(f"Trying alternative size: {alt_size}")
+                    try:
+                        alt_response = requests.get(alt_url, headers=headers, timeout=10)
+                        alt_response.raise_for_status()
+                        if 'application/json' not in alt_response.headers.get('Content-Type', ''):
+                            img = Image.open(BytesIO(alt_response.content))
+                            # Resize to 300x300 to match expected size
+                            img = img.resize((300, 300), Image.LANCZOS)
+                            img.save(filename)
+                            print(f"Successfully downloaded alternative size: {alt_size}")
+                            return img
+                    except Exception:
+                        continue
+                
+                raise Image.UnidentifiedImageError(f"API returned error: {error_msg}")
+            
             img = Image.open(BytesIO(response.content))
             img.save(filename)  # Save the image to the cache
             print(f"Downloaded new image: {filename}")
             return img
         except (requests.exceptions.RequestException, Image.UnidentifiedImageError) as e:
-            print(f"Error downloading image from {url}: {e}")
             if i < retries - 1:
-                print(f"Retrying... ({i + 1}/{retries})")
+                print(f"Retrying download ({i + 1}/{retries})...")
                 time.sleep(delay)
             else:
-                print("Max retries reached. Skipping this image.")
-                return None
+                print(f"Failed to download {url} after {retries} attempts. Using placeholder.")
+                # Create a placeholder image (dark gray square) to prevent IndexError
+                placeholder = Image.new('RGB', (300, 300), color=(50, 50, 50))
+                return placeholder
 
 def download_images_concurrently(image_urls, cache_dir):
     with concurrent.futures.ThreadPoolExecutor() as executor:
         images = list(executor.map(lambda url: download_image(url, cache_dir), image_urls))
-    return [img for img in images if img is not None]
+    # Return all images including placeholders (no filtering)
+    return images
 
 def draw_title(draw, grid_img, title, logo_img, config):
     title_padding = config.title_height // 8
@@ -307,6 +418,10 @@ def main():
 
     scrobble_counts, distributions = fetch_scrobbles_and_distributions_concurrently(users, timestamp, query_limit, config.period)
 
+    # Count users with non-zero scrobbles (successfully included)
+    users_included = sum(1 for count in scrobble_counts.values() if count > 0)
+    total_users = len(users)
+
     avg_album_distribution = np.mean(distributions, axis=0)
 
     top_albums = get_top_albums(users, avg_album_distribution, query_limit, config.period)
@@ -319,6 +434,7 @@ def main():
     output_path = "final_image.png"
     grid_img.save(output_path)
     print(f"Image saved to {output_path}")
+    print(f"\nTotal users included: {users_included} out of {total_users} ({users_included/total_users*100:.1f}%)")
 
 if __name__ == "__main__":
     main()
